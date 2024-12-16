@@ -1,0 +1,3 @@
+[submodule "IsaacGymInsertion"]
+	path = IsaacGymInsertion
+	url = https://github.com/osheraz/IsaacGymInsertion.git
