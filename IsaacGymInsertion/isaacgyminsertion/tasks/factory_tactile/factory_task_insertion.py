@@ -1394,6 +1394,7 @@ class FactoryTaskInsertionTactile(FactoryEnvInsertionTactile, FactoryABCTask):
             v.reset_socket_pos(socket_pos=socket_pos[0].cpu().detach())
 
         # self._open_gripper(torch.arange(self.num_envs))
+        # self._open_gripper_robotiq3(torch.arange(self.num_envs))
 
         # self._simulate_and_refresh()
 
@@ -1418,26 +1419,52 @@ class FactoryTaskInsertionTactile(FactoryEnvInsertionTactile, FactoryABCTask):
         self.disable_gravity()
         if self.cfg_task.grasp_at_init:
             self._reset_environment(env_ids)
+
+
             # Move arm to grasp pose
-            plug_pos_noise = (2 * (torch.rand((len(env_ids), 3),
-                                              device=self.device) - 0.5)) * self.cfg_task.randomize.grasp_plug_noise
+            plug_pos_noise = (2 * (torch.rand((len(env_ids), 3), device=self.device) - 0.5)) * self.cfg_task.randomize.grasp_plug_noise
             first_plug_pose = self.plug_grasp_pos.clone()
 
             first_plug_pose[env_ids, :2] += plug_pos_noise[:, :2] * 0
-            self._move_arm_to_desired_pose(env_ids, first_plug_pose,
-                                           sim_steps=self.cfg_task.env.num_gripper_move_sim_steps)
+            self._move_arm_to_desired_pose(env_ids, first_plug_pose, sim_steps=self.cfg_task.env.num_gripper_move_sim_steps)
             self._refresh_task_tensors()
             self._close_gripper(env_ids)
             self.enable_gravity(-9.81)
+
+            
         else:
             self._reset_predefined_environment(env_ids)
             self._close_gripper(env_ids)
             self.enable_gravity(-9.81)
 
+
         self._zero_velocities(env_ids)
+        
+        # Save init poses
+        self.init_pos = self.plug_pos.clone()
+        self.init_quat = self.plug_quat.clone()
+
+        # Lift gripper      
+        self._lift_gripper(env_ids, lift_distance=0.3)
+        self._zero_velocities(env_ids)
+
+        # Save pose for retraction:
+        self.retraction_pos = self.plug_pos.clone()
+        self.retraction_quat = self.plug_quat.clone()
+        
+        self._move_plug_to_camera_aligned_pose()
+        #self._zero_velocities(env_ids)
+
+        # Move back to retraction pose
+        self._move_arm_to_desired_pose(env_ids, self.retraction_pos, sim_steps=self.cfg_task.env.num_gripper_move_sim_steps)
+        self._zero_velocities(env_ids)
+
+        
         self.refresh_base_tensors()
         self.refresh_env_tensors()
         self._refresh_task_tensors()
+
+
 
         # Update init grasp pos
         plug_hand_pos, plug_hand_quat = self.pose_world_to_hand_base(self.plug_pos, self.plug_quat)
@@ -1899,6 +1926,9 @@ class FactoryTaskInsertionTactile(FactoryEnvInsertionTactile, FactoryABCTask):
         self._move_gripper_to_dof_pos(env_ids=env_ids, gripper_dof_pos=gripper_dof_pos, sim_steps=sim_steps)
         self.ctrl_target_gripper_dof_pos = gripper_dof_pos
 
+    
+
+
     def _close_gripper(self, env_ids, percentage=1.0, sim_steps=20):
         """
         Close gripper to a specified percentage of the maximum closing using controller.
@@ -1973,17 +2003,99 @@ class FactoryTaskInsertionTactile(FactoryEnvInsertionTactile, FactoryABCTask):
                 self._move_gripper_to_dof_pos(env_ids=env_ids, gripper_dof_pos=self.ctrl_target_gripper_dof_pos,
                                               sim_steps=1)
 
-    def _move_gripper_to_dof_pos(self, env_ids, gripper_dof_pos, sim_steps=20):
-        """Move gripper fingers to specified DOF position using controller."""
 
-        delta_hand_pose = torch.zeros((self.num_envs, self.cfg_task.env.numActions),
-                                      device=self.device)  # no arm motion
+    def _open_gripper_robotiq3(self, env_ids, sim_steps=20, open_angle=0.0):
+
+        """
+            Open the Robotiq 3-finger gripper for a specified list of environments in parallel.
+
+            Parameters:
+            - env_ids (list of int): The environment indices to operate on.
+            - sim_steps (int): Number of simulation steps after setting targets.
+            - open_angle (float): Target joint value representing fully open fingers.
+        """
+
+        # Example DOF indices for the Robotiq 3F gripper (Adjust these based on your URDF)
+        gripper_dof_indices = [8, 12, 15]
+
+        # Acquire global dof position target tensor for all envs
+        dof_position_target_tensor = self.gym.acquire_dof_position_target_tensor(self.sim)
+        dof_position_target_tensor = gymtorch.wrap_tensor(dof_position_target_tensor)
+
+        num_dofs_total = dof_position_target_tensor.shape[0]
+        num_dofs = num_dofs_total // self.num_envs  # DOFs per environment
+
+        # Convert env_ids to a tensor
+        env_ids_t = torch.tensor(env_ids, device=self.device, dtype=torch.int64)
+
+        # Compute global indices for these envs and gripper dof indices
+        # env_i * num_dofs gives the start index for that env's DOFs
+        # Adding gripper_dof_indices offsets for gripper joints
+        global_indices = (env_ids_t.unsqueeze(1) * num_dofs) + torch.tensor(gripper_dof_indices, device=self.device)
+        global_indices = global_indices.flatten()
+
+        # Set target angle for all specified envs/gripper joints at once
+        dof_position_target_tensor[global_indices] = open_angle
+
+        # Apply the updated targets
+        self.gym.set_dof_position_target_tensor(self.sim, gymtorch.unwrap_tensor(dof_position_target_tensor))
+
+        # Step simulation for sim_steps steps
+        for _ in range(sim_steps):
+            self.simulate_and_refresh()
+
+    def _close_gripper_robotiq3(self, env_ids, sim_steps=20, close_angle=1.0):
+        
+        """
+        
+            Close the Robotiq 3-finger gripper for a specified list of environments in parallel.
+
+            Parameters:
+            - env_ids (list of int): The environment indices to operate on.
+            - sim_steps (int): Number of simulation steps after setting targets.
+            - close_angle (float): Target joint value representing fully closed fingers.
+        
+        """
+
+        # Example DOF indices for the Robotiq 3F gripper (Adjust these based on your URDF)
+        gripper_dof_indices = [8, 12, 15]
+
+        # Acquire global dof position target tensor for all envs
+        dof_position_target_tensor = self.gym.acquire_dof_position_target_tensor(self.sim)
+        dof_position_target_tensor = gymtorch.wrap_tensor(dof_position_target_tensor)
+
+        num_dofs_total = dof_position_target_tensor.shape[0]
+        num_dofs = num_dofs_total // self.num_envs
+
+        env_ids_t = torch.tensor(env_ids, device=self.device, dtype=torch.int64)
+        global_indices = (env_ids_t.unsqueeze(1) * num_dofs) + torch.tensor(gripper_dof_indices, device=self.device)
+        global_indices = global_indices.flatten()
+
+        # Set target angle for all specified envs/gripper joints at once
+        dof_position_target_tensor[global_indices] = close_angle
+
+        # Apply the updated targets
+        self.gym.set_dof_position_target_tensor(self.sim, gymtorch.unwrap_tensor(dof_position_target_tensor))
+
+        # Step simulation for sim_steps steps
+        for _ in range(sim_steps):
+            self.simulate_and_refresh()
+
+
+    def _move_gripper_to_dof_pos(self, env_ids, gripper_dof_pos, sim_steps=20):
+        
+        """
+            Move gripper fingers to specified DOF position using controller.
+        """
+
+        delta_hand_pose = torch.zeros((self.num_envs, self.cfg_task.env.numActions), device=self.device)  # no arm motion
         self._apply_actions_as_ctrl_targets(delta_hand_pose, gripper_dof_pos, do_scale=False)
 
         # Step sim
         for _ in range(sim_steps):
             self._simulate_and_refresh()
 
+    '''
     def _lift_gripper(self, env_ids, gripper_dof_pos, lift_distance=0.2, sim_steps=20):
         """Lift gripper by specified distance. Called outside RL loop (i.e., after last step of episode)."""
 
@@ -1994,6 +2106,7 @@ class FactoryTaskInsertionTactile(FactoryEnvInsertionTactile, FactoryABCTask):
         for _ in range(sim_steps):
             self._apply_actions_as_ctrl_targets(delta_hand_pose, gripper_dof_pos, do_scale=False)
             self._simulate_and_refresh()
+    '''
 
     def _get_keypoint_offsets(self, num_keypoints):
         """Get uniformly-spaced keypoints along a line of unit length, centered at 0."""
@@ -2043,17 +2156,14 @@ class FactoryTaskInsertionTactile(FactoryEnvInsertionTactile, FactoryABCTask):
     def _check_plug_close_to_socket(self):
         """Check if plug is close to socket."""
         # 2
-        return torch.norm(self.plug_pos[:, :2] - self.socket_tip[:, :2], p=2,
-                          dim=-1) < self.cfg_task.rl.close_error_thresh
+        return torch.norm(self.plug_pos[:, :2] - self.socket_tip[:, :2], p=2, dim=-1) < self.cfg_task.rl.close_error_thresh
 
     def _check_plug_inserted_in_socket(self):
         """Check if plug is inserted in socket."""
 
         # Check if plug is within threshold distance of assembled state
 
-        is_plug_below_insertion_height = (
-                self.plug_pos[:, 2] <= (self.socket_tip[:, 2] - self.cfg_task.rl.success_height_thresh)
-        )
+        is_plug_below_insertion_height = (self.plug_pos[:, 2] <= (self.socket_tip[:, 2] - self.cfg_task.rl.success_height_thresh))
 
         is_plug_close_to_socket = self._check_plug_close_to_socket()
 
@@ -2064,9 +2174,7 @@ class FactoryTaskInsertionTactile(FactoryEnvInsertionTactile, FactoryABCTask):
                                torch.ones_like(is_plug_close_to_socket),
                                torch.zeros_like(is_plug_close_to_socket))
 
-        is_plug_inserted_in_socket = torch.logical_and(
-            is_plug_below_insertion_height, is_plug_close_to_socket
-        )
+        is_plug_inserted_in_socket = torch.logical_and(is_plug_below_insertion_height, is_plug_close_to_socket)
 
         # is_plug_inserted_in_socket = torch.logical_and(
         #     is_align, is_plug_inserted_in_socket
@@ -2174,3 +2282,76 @@ class FactoryTaskInsertionTactile(FactoryEnvInsertionTactile, FactoryABCTask):
             self.obs_dict['contacts'] = self.contact_queue.clone().to(self.rl_device)
 
         return self.obs_dict
+
+    def _lift_gripper(self, env_ids, lift_distance=0.2, sim_steps=20):
+        """Lift gripper by specified distance.
+        
+        Args:
+            env_ids (torch.Tensor): Indices of environments to lift gripper in
+            lift_distance (float): Distance to lift in meters  
+            sim_steps (int): Number of simulation steps to take
+        """
+        # Create zero action tensor
+        delta_hand_pose = torch.zeros([self.num_envs, 6], device=self.device)
+        
+        # Set lift action (positive z direction)
+        delta_hand_pose[env_ids, 2] = lift_distance  # lift along z
+        
+        # Step sim
+        for _ in range(sim_steps):
+            # Apply actions with same gripper position
+            self._apply_actions_as_ctrl_targets(
+                actions=delta_hand_pose,
+                ctrl_target_gripper_dof_pos=self.ctrl_target_gripper_dof_pos, 
+                do_scale=False
+            )
+            
+            # Step simulation
+            self._simulate_and_refresh()
+
+        # Zero out velocities after lifting
+        self.dof_vel[env_ids, :] = torch.zeros_like(self.dof_vel[env_ids])
+
+        # Set DOF state
+        multi_env_ids_int32 = self.kuka_actor_ids_sim[env_ids].flatten() 
+        self.gym.set_dof_state_tensor_indexed(
+            self.sim,
+            gymtorch.unwrap_tensor(self.dof_state),
+            gymtorch.unwrap_tensor(multi_env_ids_int32),
+            len(multi_env_ids_int32)
+        )
+
+    def _move_plug_to_camera_aligned_pose(self):
+        """Move the plug to face the front camera after lifting."""
+        
+        # Calculate target position - keep current XY, adjust Z 
+        target_pos = self.fingertip_centered_pos.clone()
+        target_pos[:, 2] = self.socket_pos[:, 2] + 0.3  # Hold above socket
+        
+        # Set target quaternion to face camera (rotated 90 degrees around Y axis)
+        current_quat = self.fingertip_centered_quat.clone()
+        roll, pitch, yaw = torch_jit_utils.get_euler_xyz(current_quat)
+        
+        # Rotate -90 degrees around Y axis to face camera
+        # Stack as tensor and adjust pitch
+        target_euler = torch.stack([roll, pitch - torch.pi/2, yaw], dim=-1)
+        
+        target_quat = torch_jit_utils.quat_from_euler_xyz(
+            target_euler[:, 0],  # roll
+            target_euler[:, 1],  # pitch
+            target_euler[:, 2]   # yaw
+        )
+        
+        # Move arm to desired pose
+        self._move_arm_to_desired_pose(
+            env_ids=torch.arange(self.num_envs, device=self.device),  
+            desired_pos=target_pos,
+            desired_rot=target_quat, 
+            sim_steps=600  # More steps for smoother motion
+        )
+
+        #self._move_gripper_to_dof_pos(
+        #    env_ids=torch.arange(self.num_envs, device=self.device),
+        #    gripper_dof_pos=target_pos,
+        #     sim_steps=600
+        #)

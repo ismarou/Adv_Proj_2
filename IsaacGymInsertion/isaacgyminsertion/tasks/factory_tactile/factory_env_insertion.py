@@ -132,19 +132,24 @@ class ExtrinsicContact:
         return transformed
 
     def reset_socket_pos(self, socket_pos):
-
         self.socket_trimesh = self.reset_socket_trimesh.copy()
         self.socket_trimesh = self.socket_trimesh.apply_scale(1.0)
         self.socket_pos = socket_pos
         T = np.eye(4)
         T[0:3, -1] = self.socket_pos
         self.socket_trimesh.apply_transform(T)
-
+        
+        # Create Open3D mesh from Trimesh
+        vertices = np.asarray(self.socket_trimesh.vertices)
+        faces = np.asarray(self.socket_trimesh.faces)
+        o3d_mesh = o3d.geometry.TriangleMesh()
+        o3d_mesh.vertices = o3d.utility.Vector3dVector(vertices)
+        o3d_mesh.triangles = o3d.utility.Vector3iVector(faces)
+        
+        # Create raycasting scene
         self.socket = o3d.t.geometry.RaycastingScene()
-        self.socket.add_triangles(
-            o3d.t.geometry.TriangleMesh.from_legacy(self.socket_trimesh.as_open3d)
-        )
-        #self.socket_pcl = trimesh.sample.sample_surface_even(self.socket_trimesh, self.n_points, seed=42)[0]
+        self.socket.add_triangles(o3d.t.geometry.TriangleMesh.from_legacy(o3d_mesh))
+        
         self.socket_pcl = trimesh.sample.sample_surface_even(self.socket_trimesh, self.n_points)[0]
         self.plug_pose_no_rot = np.repeat(np.eye(4)[np.newaxis, :, :], self.num_envs, axis=0)
 

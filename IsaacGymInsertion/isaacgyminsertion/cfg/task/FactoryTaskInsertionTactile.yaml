@@ -67,7 +67,7 @@ env:
 
     openhand:
         distal_open: 0.1
-        distal_close: 0.4
+        distal_close: 0.2
         proximal_open: 1.0
         proximal_close: 2.4
         proximal_noise: 0.1
@@ -103,12 +103,12 @@ env:
     num_gripper_lift_sim_steps: 25  # number of timesteps to reserve for lift after last step of episode
 
     socket_priv_obs_noise: [ 0.000, 0.000, 0.000 ]
-    socket_pos_obs_noise: [ 0.005, 0.005, 0.005 ]
+    socket_pos_obs_noise:  [ 0.000, 0.000, 0.000 ] #[ 0.005, 0.005, 0.005 ]
 
     socket_rot_obs_noise: [ 0.0, 0.0, 0.0 ]
 
     socket_base_height: 0.003
-    plug_grasp_threshold: 0.01
+    plug_grasp_threshold: 0.06
 
     tactile: False
     tactile_display_viz: False
@@ -159,17 +159,17 @@ randomize:
     same_socket: False
     # for grasp generations
 #    plug_pos_xy_initial: [0.50, 0.0, 0.0]  # z 0.03  initial XY position of plug on table
-    grasp_plug_noise: 0.003 # xyz noise on grasp pos position during grasp at init
+    grasp_plug_noise: 0.00 # xyz noise on grasp pos position during grasp at init
     plug_pos_xy_noise: [ 0.01,  0.01] # noise on plug position
-    plug_rot_noise: [ 0.3, 0.3, 0.3 ] # [0.3, 0.3, 0.3] rot noise on plug init
+    plug_rot_noise: [ 0., 0., 0. ] # [0.3, 0.3, 0.3] rot noise on plug init
     plug_pos_z_noise_bounds: [ 0.05, 0.08 ]  # [0.05, 0.1] plug z bound noise
 #    plug_quat_noise: [0.0, 0.0, 0.0, 0.0]
 
     socket_pos_xy_initial: [0.5, 0.0, 0.0]  # initial XY position of plug on table # round_hole_2in  width = 0.1016, length = 0.09144
-    socket_pos_xy_noise: [0.05, 0.05]  # [0.1, 0.1] noise on socket position
-    socket_pos_z_noise_bounds: [0.00, 0.05]  # noise on socket offset from table
+    socket_pos_xy_noise: [0.0, 0.0]  # [0.1, 0.1] noise on socket position
+    socket_pos_z_noise_bounds: [0.00, 0.0]  # noise on socket offset from table
 #    above_socket_noise: [0.03, 0.03, 0.001]
-    socket_rot_euler_noise: [0.0, 0.0, 0.0872665]  # noise on socket position
+    socket_rot_euler_noise:  [ 0.000, 0.000, 0.000 ] #[0.0, 0.0, 0.0872665]  # noise on socket position
 
     scale_noise_pos: [0.002, 0.002, 0.002]
     scale_noise_rot: [ 0.01, 0.01, 0.01]
